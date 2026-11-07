@@ -205,10 +205,15 @@ sasl_opts = [
   handshake_vsn: 1,
   mechanism_opts: [
     token_mfa: {MyApp.KafkaToken, :fetch!, []},
+    on_rejected_mfa: {MyApp.KafkaToken, :drop, []},
     extensions: %{"logicalCluster" => "lkc-abc123", "identityPoolId" => "pool-xyz"}
   ]
 ]
 ```
+
+If the broker refuses the token, authentication raises `KlifeProtocol.SASL.AuthenticationError`, with the broker's error (RFC 7628 error JSON such as `{"status":"invalid_token"}`) in `error_message`. A cached token that is refused, for instance because it was revoked, would be refused again on every new connection until it expires. To avoid that, pass `on_rejected_mfa`: it is applied with the refused token and the broker's error appended to its args (`MyApp.KafkaToken.drop(token, error)` above), so the cache can drop it and the next authentication gets a new one. Many connections may be refused at once with the same token, so drop it only if the cache still holds that token: a new one may have been fetched meanwhile. Errors raised by the callback are logged and do not change the error raised.
+
+All mechanisms raise `KlifeProtocol.SASL.AuthenticationError` when the broker refuses the credentials (`error_code` 58), while network failures during authentication raise other errors.
 
 ### Session lifetime
 

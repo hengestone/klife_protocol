@@ -1,6 +1,7 @@
 defmodule KlifeProtocol.SASL do
   alias KlifeProtocol.Messages.SaslAuthenticate
   alias KlifeProtocol.Messages.SaslHandshake
+  alias KlifeProtocol.SASL.AuthenticationError
 
   @supported_mechanisms %{
     "PLAIN" => {KlifeProtocol.SASL.Mechanism.Plain, []},
@@ -27,9 +28,12 @@ defmodule KlifeProtocol.SASL do
           resp
 
         %{error_code: ec, error_message: error_message} ->
-          raise """
-          Unexpected error on SASL authentication message. ErrorCode: #{inspect(ec)} ErrorMessage: #{inspect(error_message)}
-          """
+          raise AuthenticationError,
+            mechanism: mech,
+            error_code: ec,
+            error_message: error_message,
+            message:
+              "SASL #{mech} authentication failed. ErrorCode: #{inspect(ec)} ErrorMessage: #{inspect(error_message)}"
       end
     end
 
