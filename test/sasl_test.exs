@@ -5,6 +5,7 @@ defmodule KlifeProtocol.SaslTest do
   alias KlifeProtocol.TestSupport.Helpers
 
   alias KlifeProtocol.Messages.Produce
+  alias KlifeProtocol.SASL.AuthenticationError
 
   @brokers_sasl [
     kafka1: "localhost:19094",
@@ -216,9 +217,12 @@ defmodule KlifeProtocol.SaslTest do
     opts = [backend: :ssl, active: false, sasl_opts: sasl_opts] ++ ssl_opts
     [host, port] = String.split(@brokers_sasl[:kafka1], ":")
 
-    assert_raise RuntimeError, ~r/ErrorCode: 58/, fn ->
-      Socket.connect(host, String.to_integer(port), opts)
-    end
+    error =
+      assert_raise AuthenticationError, ~r/ErrorCode: 58/, fn ->
+        Socket.connect(host, String.to_integer(port), opts)
+      end
+
+    assert %AuthenticationError{mechanism: "SCRAM-SHA-512", error_code: 58} = error
   end
 
   # Brokers without a configured validator accept unsecured JWTs ("alg": "none"),
@@ -273,17 +277,28 @@ defmodule KlifeProtocol.SaslTest do
       auth_vsn: 2,
       handshake_vsn: 1,
       mechanism_opts: [
-        token_mfa: {__MODULE__, :unsecured_jwt, [-60]}
+        token_mfa: {__MODULE__, :unsecured_jwt, [-60]},
+        on_rejected_mfa: {__MODULE__, :token_rejected, [self()]}
       ]
     ]
 
     opts = [backend: :ssl, active: false, sasl_opts: sasl_opts] ++ ssl_opts
     [host, port] = String.split(@brokers_sasl[:kafka1], ":")
 
-    assert_raise RuntimeError, ~r/ErrorCode: 58.*invalid_token/s, fn ->
-      Socket.connect(host, String.to_integer(port), opts)
-    end
+    error =
+      assert_raise AuthenticationError, ~r/ErrorCode: 58.*invalid_token/s, fn ->
+        Socket.connect(host, String.to_integer(port), opts)
+      end
+
+    assert %AuthenticationError{mechanism: "OAUTHBEARER", error_code: 58} = error
+
+    # The refused token is handed back, so a cache can drop it
+    assert_received {:token_rejected, token, error_json}
+    assert [_header, _claims, ""] = String.split(token, ".")
+    assert error_json =~ "invalid_token"
   end
+
+  def token_rejected(test_pid, token, error), do: send(test_pid, {:token_rejected, token, error})
 
   @tag core: true
   test "oauthbearer session lasts until the token expires and re-authentication extends it" do
